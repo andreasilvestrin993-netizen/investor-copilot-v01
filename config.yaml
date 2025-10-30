@@ -1,0 +1,6 @@
+app:
+  timezone: "Europe/Madrid"
+
+pricing:
+  fx_source: "marketstack"   # options: marketstack, ecb
+  ecb_fallback: true

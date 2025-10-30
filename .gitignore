@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+
+# Environment
+.env
+
+# Local output / generated files
+output/
+data/*.docx
+data/*.md
+
+# Streamlit
+.streamlit/

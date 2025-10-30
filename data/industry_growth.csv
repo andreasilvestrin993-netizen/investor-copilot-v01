@@ -1,0 +1,43 @@
+Industry,Sector,YoY_Growth_%
+Technology,AI & Machine Learning,30.0
+Technology,Cloud Infrastructure & Services,27.0
+Technology,Cybersecurity,15.0
+Technology,Software (Applications & DevOps),12.0
+Technology,Semiconductors,10.0
+Technology,"Data Infrastructure (Storage, Networking, CDNs)",23.0
+Energy & Clean Tech,EV & Battery Systems,12.0
+Energy & Clean Tech,Solar & Wind Power,11.0
+Energy & Clean Tech,Hydrogen & Fuel Cells,8.0
+Energy & Clean Tech,"Nuclear Energy (incl. SMRs, Uranium)",9.0
+Energy & Clean Tech,Utilities & Grid Tech,5.0
+Energy & Clean Tech,Renewable Infrastructure,8.0
+Industrials,Aerospace & Defense,9.0
+Industrials,Advanced Manufacturing & Equipment,7.0
+Industrials,Construction & Engineering,4.5
+Industrials,Security & Infrastructure,6.0
+Industrials,Water & Environmental Systems,5.0
+Automotive & Mobility,EV Manufacturers,11.0
+Automotive & Mobility,Autonomous Vehicles & Lidar,14.0
+Automotive & Mobility,"Urban Air Mobility (eVTOL, Drones)",15.0
+Automotive & Mobility,Telematics & Mobility Tech,10.0
+Financial Services,Fintech & Neo-Banks,10.0
+Financial Services,Trading Platforms & Exchanges,8.0
+Financial Services,Crypto Infrastructure,20.0
+Financial Services,AI-based Financial Services,15.0
+Healthcare & Life Sciences,Biotechnology & Genomics,12.0
+Healthcare & Life Sciences,Medical Devices & Diagnostics,8.0
+Healthcare & Life Sciences,Healthcare Software & Analytics,10.0
+Healthcare & Life Sciences,Pharmaceuticals,6.0
+Consumer Tech & Digital Media,E-Commerce Platforms,8.0
+Consumer Tech & Digital Media,Social Media & Content,6.0
+Consumer Tech & Digital Media,Gaming & Interactive Media,10.0
+Consumer Tech & Digital Media,Consumer Electronics,4.0
+Telecom & Connectivity,Communication Infrastructure,5.0
+Telecom & Connectivity,Networking & 5G Tech,8.0
+Telecom & Connectivity,Telecom Services,3.5
+Materials & Mining,Lithium & Battery Materials,9.0
+Materials & Mining,Rare Earths & Advanced Materials,7.0
+Materials & Mining,Uranium & Nuclear Fuel Supply,8.0
+Real Estate & Infrastructure,Data Centers,10.0
+Real Estate & Infrastructure,Smart Infrastructure,7.0
+Real Estate & Infrastructure,Real Estate Tech & Services,5.0
