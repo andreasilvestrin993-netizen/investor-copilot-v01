@@ -1,1 +1,38 @@
-Name,Symbol,ISIN,Currency,Quantity,BEP,Value,Total P/L€,Total P/L%
+Name;Symbol;Quantity;BEP;Sector;Currency
+3D Systems Corp;SYV;800;2.424;Technology (3D Printing);EUR
+ADR on Alibaba Group Holding;BABA;30;84.083333;Consumer Tech & Digital Media (E-commerce);USD
+Aehr Test Systems;AEHR;150;14.493333;Technology (Semiconductors);USD
+AIRO Group Holdings Inc;AIRO;125;18.45;Industrials (Aerospace & Defense);USD
+Archer Aviation Inc;ACHR;200;7.666666;Automotive & Mobility (Urban Air Mobility);USD
+aTyr Pharma Inc;ATYR;2500;0.964672;Healthcare & Life Sciences (Biotech & Genomics);USD
+Biomea Fusion Inc;BMEA;1250;1.625;Healthcare & Life Sciences (Biotech & Genomics);USD
+D-Wave Quantum Inc;QBTS;200;1.780106;Technology (Quantum Computing);USD
+DLocal Ltd;DLO;200;10.315;Financial Services (Fintech & Neo-Banks);USD
+Enel;ENEL;350;5.19255;Energy & Clean Tech (Utilities & Grid Tech);EUR
+Ginkgo Bioworks Holdings Inc;DNA;200;6.879166;Healthcare & Life Sciences (Biotech & Genomics);USD
+GlobalFoundries Inc;GFS;75;33.136666;Technology (Semiconductors);USD
+Knightscope Inc - Class A;KSCP;500;5.016196;Industrials (Security & Infrastructure);USD
+Leading Edge Materials Corp;7FL;7000;0.207428;Materials & Mining (Rare Earths & Advanced Materials);EUR
+Luna Innovations Inc;LUNA;750;0.8891;Industrials (Advanced Manufacturing & Equipment);USD
+Mkango Resources Ltd;ZMK;1000;0.755;Materials & Mining (Rare Earths & Advanced Materials);EUR
+Momentus Inc - Class A;MNTS;2000;1.3;Industrials (Aerospace & Defense);USD
+Nu Holdings Ltd;NU;200;13.336607;Financial Services (Fintech & Neo-Banks);USD
+NuScale Power Corp;SMR;80;20.7148;Energy & Clean Tech (Nuclear Energy/SMRs);USD
+Palantir Technologies Inc Class A;PLTR;60;17.8194;Technology (AI & Machine Learning);USD
+Quantum Computing Inc;QUBT;250;0.4735;Technology (Quantum Computing);USD
+Red Cat Holdings Inc;RCAT;250;7.31;Automotive & Mobility (eVTOL & Drones);USD
+Redwire Corp;RDW;500;7.846;Industrials (Aerospace & Defense);USD
+Rekor Systems Inc;REKR;1500;0.947445;Automotive & Mobility (Telematics & Mobility Tech);USD
+Richtech Robotics Inc;RR;750;1.74796;Industrials (Advanced Manufacturing & Equipment);USD
+Rigetti Computing Inc;RGTI;200;0.7613;Technology (Quantum Computing);USD
+Rocket Lab USA Inc;RKLB;50;25.42;Industrials (Aerospace & Defense);USD
+Sangamo Therapeutics;SGMO;4000;0.451605;Healthcare & Life Sciences (Biotech & Genomics);USD
+Schrodinger Inc;SDGR;125;19.485;Healthcare & Life Sciences (Healthcare Software & Analytics);USD
+Sellas Life Sciences Group Inc;SLS;1250;1.54118;Healthcare & Life Sciences (Biotech & Genomics);USD
+Sigma Lithium Corp;SGML;400;6.6;Materials & Mining (Lithium & Battery Materials);USD
+SkyWater Technology Inc;SKYT;150;7.97;Technology (Semiconductors);USD
+SOPHiA GENETICS SA;SOPH;600;3.052;Healthcare & Life Sciences (Healthcare Software & Analytics);USD
+Stellantis NV;STLA;250;9.965;Automotive & Mobility (EV/Auto OEM);USD
+Stereotaxis Inc;STXS;500;1.71;Healthcare & Life Sciences (Medical Devices & Diagnostics);USD
+Stratasys Ltd;SSYS;200;10.0;Technology (3D Printing);USD
+Symbotic Inc;SYM;50;23.736666;Industrials (Advanced Manufacturing & Equipment);USD
