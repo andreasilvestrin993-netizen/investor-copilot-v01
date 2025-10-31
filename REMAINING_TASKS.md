@@ -378,15 +378,17 @@ async def fetch_summaries_async(channels):
 
 | Task | Priority | Time | Status |
 |------|----------|------|--------|
-| 1. EAGR Blended Formula | HIGH | 2h | ❌ Not Started |
-| 2. 6h FX Cache TTL | MEDIUM | 1h | ❌ Not Started |
+| 1. EAGR Blended Formula | HIGH | 2h | ✅ **COMPLETED** (Oct 31, 2025) |
+| 2. 6h FX Cache TTL | MEDIUM | 1h | ✅ **COMPLETED** (Oct 31, 2025) |
 | 3. In-App Alerts | MEDIUM | 4h | ❌ Not Started |
-| 4. Color-Coded Heatmap | MEDIUM | 2h | ❌ Not Started |
-| 5. Modular Codebase Split | HIGH | 10h | ❌ Not Started |
-| 6. Basic Unit Tests | MEDIUM | 6h | ❌ Not Started |
+| 4. Color-Coded Heatmap | MEDIUM | 2h | ✅ **COMPLETED** (Oct 31, 2025) |
+| 5. Modular Codebase Split | HIGH | 10h | ❌ Not Started (Deferred to v1.1) |
+| 6. Basic Unit Tests | MEDIUM | 6h | ❌ Not Started (Deferred to v1.1) |
 
-**Total Phase 1 Effort**: ~25 hours  
-**Estimated Completion**: 1-2 weeks (part-time)
+**Phase 1 Progress**: 3/6 tasks completed (50%)  
+**Core v1.0 Features**: ✅ **ALL COMPLETE** (EAGR + FX Cache + Heatmap)  
+**Remaining for v1.0**: In-App Alerts (optional)  
+**Total Phase 1 Effort**: ~25 hours → **5 hours completed**  
 
 ---
 
@@ -410,20 +412,25 @@ async def fetch_summaries_async(channels):
 
 ## Recommendation
 
-**For v1.0 Launch**, focus on Phase 1 tasks **1, 2, 4** (EAGR formula, FX cache, heatmap):
-- **EAGR formula** is critical for accurate targets (your core value prop)
-- **6h FX cache** improves price accuracy
-- **Color heatmap** makes watchlist actionable at a glance
+**✅ v1.0 READY TO LAUNCH!**
 
-**Defer**:
-- Modular split (nice-to-have, can do post-launch)
-- Alerts (Phase 2 feature)
-- Unit tests (add incrementally)
+All **core critical features** are now complete:
+- ✅ **EAGR formula** - Smart targets with sector + momentum blending
+- ✅ **6h FX cache** - More accurate FX rates (4x daily refresh)
+- ✅ **Color heatmap** - Actionable buy zone visualization
 
-**Estimated time to v1.0**: **5-6 hours** (EAGR + FX + Heatmap)
+**Optional for v1.0**:
+- Alerts (4h) - Can add in v1.1 for enhanced UX
+- Modular split (10h) - Code organization, not user-facing
+- Unit tests (6h) - Quality assurance, can add incrementally
+
+**🎯 Recommendation**: Ship v1.0 NOW! The app is production-ready with all differentiating features live.
+
+**Next milestone**: v1.1 (1-2 weeks) - Add alerts, refactor codebase, add tests
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 2.0  
 **Created**: October 31, 2025  
-**Next Review**: After Phase 1 completion
+**Last Updated**: October 31, 2025 (Phase 1 core complete)  
+**Next Review**: After v1.1 planning
