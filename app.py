@@ -37,8 +37,18 @@ CACHE_DIR.mkdir(exist_ok=True)
 PRICES_CACHE_FILE = CACHE_DIR / "prices_cache.json"
 FX_CACHE_FILE = CACHE_DIR / "fx_cache.json"
 
-def load_daily_cache(cache_file: Path):
-    """Load cache if it's from today, otherwise return empty dict"""
+# Cache TTL settings (in hours)
+PRICES_CACHE_TTL = 24  # 24 hours for prices
+FX_CACHE_TTL = 6       # 6 hours for FX rates (more volatile)
+
+def load_daily_cache(cache_file: Path, ttl_hours=24):
+    """
+    Load cache if it's within TTL, otherwise return empty dict
+    
+    Args:
+        cache_file: Path to cache file
+        ttl_hours: Time-to-live in hours (default 24)
+    """
     if not cache_file.exists():
         return {}
     
@@ -46,22 +56,25 @@ def load_daily_cache(cache_file: Path):
         with open(cache_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        # Check if cache is from today
-        cache_date = data.get('date')
-        today = datetime.now().date().isoformat()
+        # Check if cache is within TTL
+        cache_timestamp = data.get('timestamp')
+        if cache_timestamp:
+            cache_time = datetime.fromisoformat(cache_timestamp)
+            now = datetime.now()
+            hours_diff = (now - cache_time).total_seconds() / 3600
+            
+            if hours_diff <= ttl_hours:
+                return data.get('data', {})
         
-        if cache_date == today:
-            return data.get('data', {})
-        else:
-            return {}
+        return {}
     except Exception:
         return {}
 
 def save_daily_cache(cache_file: Path, data: dict):
-    """Save cache with today's date"""
+    """Save cache with current timestamp"""
     try:
         cache_data = {
-            'date': datetime.now().date().isoformat(),
+            'timestamp': datetime.now().isoformat(),
             'data': data
         }
         with open(cache_file, 'w', encoding='utf-8') as f:
@@ -73,7 +86,7 @@ def save_daily_cache(cache_file: Path, data: dict):
 if 'symbol_cache' not in st.session_state:
     st.session_state.symbol_cache = {}
 if 'prices_cache' not in st.session_state:
-    st.session_state.prices_cache = load_daily_cache(PRICES_CACHE_FILE)
+    st.session_state.prices_cache = load_daily_cache(PRICES_CACHE_FILE, PRICES_CACHE_TTL)
 if 'last_price_fetch' not in st.session_state:
     # Set to today if we loaded cache, otherwise None
     if st.session_state.prices_cache:
@@ -81,7 +94,7 @@ if 'last_price_fetch' not in st.session_state:
     else:
         st.session_state.last_price_fetch = None
 if 'fx_cache' not in st.session_state:
-    st.session_state.fx_cache = load_daily_cache(FX_CACHE_FILE)
+    st.session_state.fx_cache = load_daily_cache(FX_CACHE_FILE, FX_CACHE_TTL)
 if 'last_fx_fetch' not in st.session_state:
     # Set to today if we loaded cache, otherwise None
     if st.session_state.fx_cache:
@@ -499,6 +512,57 @@ def save_growth_table(df):
     ]
     
     df_clean[["Industry","Sector","YoY_Growth_%"]].to_csv(IND_GROWTH_CSV, index=False)
+
+def calc_eagr_targets(current_price, target_1y, sector_growth_pct, r52w_pct=None):
+    """
+    Calculate multi-year targets using EAGR (Enhanced Annual Growth Rate).
+    Blends sector growth (70%) with 52-week momentum (30%).
+    
+    Args:
+        current_price: Current stock price
+        target_1y: User's 1-year target (can be manually adjusted)
+        sector_growth_pct: Sector YoY growth rate (as percentage, e.g., 15.0 for 15%)
+        r52w_pct: 52-week price change (as percentage, optional)
+    
+    Returns:
+        tuple: (target_1y_adjusted, target_3y, target_5y, target_10y)
+    """
+    if not current_price or current_price <= 0:
+        return None, None, None, None
+    
+    if not target_1y or target_1y <= 0:
+        return None, None, None, None
+    
+    # If no 52W momentum data, use sector growth
+    if r52w_pct is None:
+        r52w_pct = sector_growth_pct
+    
+    # Clamp 52W momentum to reasonable range (-50% to +50%)
+    r52w_pct = max(min(r52w_pct, 50), -50)
+    
+    # Calculate EAGR: 70% sector growth + 30% 52-week momentum
+    eagr_pct = (0.7 * sector_growth_pct) + (0.3 * r52w_pct)
+    
+    # Bound EAGR to -10% to +25%
+    eagr_pct = max(min(eagr_pct, 25), -10)
+    eagr = eagr_pct / 100  # Convert to decimal
+    
+    # Calculate 1Y growth implied by user's target
+    g1 = (target_1y / current_price) - 1
+    
+    # Smooth the 1Y growth: 60% user target + 40% EAGR
+    g1_smooth = (0.6 * g1) + (0.4 * eagr)
+    
+    # Adjusted 1Y target based on smoothing
+    t1_final = round(current_price * (1 + g1_smooth), 2)
+    
+    # Multi-year targets using EAGR compounding
+    t3 = round(t1_final * ((1 + eagr) ** 2), 2)   # 2 years after year 1
+    t5 = round(t1_final * ((1 + eagr) ** 4), 2)   # 4 years after year 1
+    t10 = round(t1_final * ((1 + eagr) ** 9), 2)  # 9 years after year 1
+    
+    return t1_final, t3, t5, t10
+
 
 # ----------------------------
 # Marketstack FX & Prices (EOD) + Fallbacks
@@ -2136,20 +2200,26 @@ with tabs[2]:
             last = prices_w.get(psym, None)
             last_eur = to_eur(last, pccy, FX_MAP) if last is not None else None
             
-            # 52-week data not fetched automatically for performance
-            week52_high = None
-            week52_low = None
+            # Get 52-week data for this symbol if available
+            week52_info = week52_data.get(psym, {})
+            week52_high = week52_info.get('high')
+            week52_low = week52_info.get('low')
+            
+            # Calculate 52-week momentum (price change %)
+            r52w_pct = None
+            if week52_low and last and week52_low > 0:
+                r52w_pct = ((last - week52_low) / week52_low) * 100
 
             def fnum(x):
                 return float(x) if x is not None and not pd.isna(x) else None
 
             # Get sector growth rate
-            growth_rate = None
+            growth_rate_pct = None
             if sector:
                 growth_df = load_csv(IND_GROWTH_CSV, ["Industry","Sector","YoY_Growth_%"])
                 sector_rows = growth_df[growth_df["Sector"].str.upper() == sector.upper()]
                 if not sector_rows.empty:
-                    growth_rate = sector_rows["YoY_Growth_%"].mean() / 100  # Convert to decimal
+                    growth_rate_pct = sector_rows["YoY_Growth_%"].mean()  # Keep as percentage
 
             # Get manual values or auto-populate
             buyl = fnum(r.get("Buy_Low"))
@@ -2166,18 +2236,26 @@ with tabs[2]:
             if buyh is None and last_eur is not None:
                 buyh = last_eur * 1.1  # Default: 10% above current price
             
-            # Auto-populate Target 1Y if not set
-            if t1 is None and last_eur is not None and growth_rate is not None:
-                t1 = last_eur * (1 + growth_rate)
+            # Auto-populate Target 1Y if not set (using simple sector growth)
+            if t1 is None and last_eur is not None and growth_rate_pct is not None:
+                t1 = last_eur * (1 + (growth_rate_pct / 100))
             
-            # Calculate multi-year targets from Target 1Y and sector growth
-            if t1 and growth_rate is not None:
-                if t3 is None:
-                    t3 = t1 * ((1 + growth_rate) ** 2)  # Compound 2 more years after year 1
-                if t5 is None:
-                    t5 = t1 * ((1 + growth_rate) ** 4)  # Compound 4 more years after year 1
-                if t10 is None:
-                    t10 = t1 * ((1 + growth_rate) ** 9)  # Compound 9 more years after year 1
+            # Calculate multi-year targets using EAGR formula
+            if t1 and last_eur and growth_rate_pct is not None:
+                t1_adj, t3_calc, t5_calc, t10_calc = calc_eagr_targets(
+                    current_price=last_eur,
+                    target_1y=t1,
+                    sector_growth_pct=growth_rate_pct,
+                    r52w_pct=r52w_pct
+                )
+                
+                # Use EAGR calculations for multi-year targets
+                if t3 is None and t3_calc:
+                    t3 = t3_calc
+                if t5 is None and t5_calc:
+                    t5 = t5_calc
+                if t10 is None and t10_calc:
+                    t10 = t10_calc
 
             # Calculate percentage differences
             from_low = ((last_eur - buyl) / buyl * 100) if (last_eur is not None and buyl and buyl>0) else None
@@ -2335,7 +2413,7 @@ with tabs[2]:
                                     help="3Y, 5Y, 10Y auto-calculated from this"
                                 )
                             
-                            st.caption("ℹ️ Multi-year targets (3Y, 5Y, 10Y) are automatically calculated from Target 1Y using sector growth rates")
+                            st.caption("ℹ️ Multi-year targets (3Y, 5Y, 10Y) are automatically calculated using EAGR formula: 70% sector growth + 30% 52W momentum, bounded -10% to +25%")
                             
                             if st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True):
                                 # Update the CSV
@@ -2414,32 +2492,66 @@ with tabs[2]:
         
         display_wv = filtered_wv[display_cols].copy()
         
-        st.write("**🔭 Watchlist Stocks** - Click column headers to sort. Use the forms above to edit values.")
+        # Apply color coding based on opportunity zones
+        def highlight_opportunities(row):
+            """
+            Color code rows based on buy zone proximity and upside potential:
+            - Green: Near buy zone (price within 5% of Buy High)
+            - Gold: Moderate upside (10-20% to target)
+            - Red: Overvalued (price above 1Y target)
+            - White/Default: Normal (>20% to target)
+            """
+            current = row.get("Current Price")
+            buy_high = row.get("Buy High")
+            target_1y = row.get("Target 1Y")
+            upside_1y = row.get("Upside to 1Y")
+            
+            # Skip if key values missing
+            if pd.isna(current) or pd.isna(buy_high) or pd.isna(target_1y):
+                return [''] * len(row)
+            
+            # Determine color based on opportunity zone
+            if current <= buy_high * 1.05:  # Within 5% of buy zone
+                color = 'background-color: rgba(76, 175, 80, 0.15)'  # Green
+            elif current >= target_1y:  # Overvalued
+                color = 'background-color: rgba(244, 67, 54, 0.15)'  # Red
+            elif upside_1y and upside_1y < 20:  # Moderate upside
+                color = 'background-color: rgba(255, 193, 7, 0.15)'  # Gold/Yellow
+            else:
+                color = ''  # Default (white/dark depending on theme)
+            
+            return [color] * len(row)
         
-        st.dataframe(
-            display_wv,
-            use_container_width=True,
-            column_config={
-                "Name": st.column_config.TextColumn("Name", width="medium"),
-                "Symbol": st.column_config.TextColumn("Symbol", width="small"),
-                "Sector": st.column_config.TextColumn("Sector", width="medium"),
-                "Currency": st.column_config.TextColumn("Currency", width="small"),
-                "Current Price": st.column_config.NumberColumn(
-                    "Current Price (€)",
-                    format="€%.2f",
-                    width="small"
-                ),
-                "Buy Low": st.column_config.NumberColumn(
-                    "Buy Low (€)",
-                    format="€%.2f",
-                    width="small"
-                ),
-                "Buy High": st.column_config.NumberColumn(
-                    "Buy High (€)",
-                    format="€%.2f",
-                    width="small"
-                ),
-                "% from Buy Low": st.column_config.NumberColumn(
+        st.write("**🔭 Watchlist Stocks** - Click column headers to sort. Color-coded by opportunity.")
+        st.caption("🟢 Green: Near buy zone | 🟡 Gold: Moderate upside | 🔴 Red: Above 1Y target | ⚪ White: Normal")
+        
+        # Apply styling with proper error handling
+        try:
+            styled_wv = display_wv.style.apply(highlight_opportunities, axis=1)
+            st.dataframe(
+                styled_wv,
+                use_container_width=True,
+                column_config={
+                    "Name": st.column_config.TextColumn("Name", width="medium"),
+                    "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+                    "Sector": st.column_config.TextColumn("Sector", width="medium"),
+                    "Currency": st.column_config.TextColumn("Currency", width="small"),
+                    "Current Price": st.column_config.NumberColumn(
+                        "Current Price (€)",
+                        format="€%.2f",
+                        width="small"
+                    ),
+                    "Buy Low": st.column_config.NumberColumn(
+                        "Buy Low (€)",
+                        format="€%.2f",
+                        width="small"
+                    ),
+                    "Buy High": st.column_config.NumberColumn(
+                        "Buy High (€)",
+                        format="€%.2f",
+                        width="small"
+                    ),
+                    "% from Buy Low": st.column_config.NumberColumn(
                     "% from Buy Low",
                     format="%.1f%%",
                     width="small"
@@ -2492,6 +2604,15 @@ with tabs[2]:
             },
             hide_index=True
         )
+        except Exception as e:
+            # Fallback to plain dataframe if styling fails
+            st.warning("⚠️ Color-coding not available, showing plain table")
+            st.dataframe(
+                display_wv,
+                use_container_width=True,
+                hide_index=True
+            )
+
 
 
 # ----------------------------
