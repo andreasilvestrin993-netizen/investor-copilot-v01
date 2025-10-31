@@ -480,7 +480,25 @@ def load_growth_table():
     return pd.read_csv(IND_GROWTH_CSV)[["Industry","Sector","YoY_Growth_%"]]
 
 def save_growth_table(df):
-    df[["Industry","Sector","YoY_Growth_%"]].to_csv(IND_GROWTH_CSV, index=False)
+    """Save industry growth table with validation rules"""
+    # Validation: Remove rows with any empty values
+    df_clean = df.dropna(subset=["Industry", "Sector", "YoY_Growth_%"])
+    
+    # Validation: Remove rows where any field is empty string
+    df_clean = df_clean[
+        (df_clean["Industry"].str.strip() != "") & 
+        (df_clean["Sector"].str.strip() != "") &
+        (df_clean["YoY_Growth_%"].notna())
+    ]
+    
+    # Validation: Ensure growth is numeric and reasonable (-50 to +100%)
+    df_clean["YoY_Growth_%"] = pd.to_numeric(df_clean["YoY_Growth_%"], errors='coerce')
+    df_clean = df_clean[
+        (df_clean["YoY_Growth_%"] >= -50) & 
+        (df_clean["YoY_Growth_%"] <= 100)
+    ]
+    
+    df_clean[["Industry","Sector","YoY_Growth_%"]].to_csv(IND_GROWTH_CSV, index=False)
 
 # ----------------------------
 # Marketstack FX & Prices (EOD) + Fallbacks
@@ -2708,21 +2726,27 @@ with tabs[3]:
 # ----------------------------
 with tabs[4]:
     st.subheader("Industry → Sector Growth (YoY %)")
-    st.caption("Edit values. Keep it simple (≤10 industries; ≤6 sectors each).")
+    st.caption("Edit values. Rules: All fields required, growth must be between -50% and +100%.")
     growth = load_growth_table()
     edited = st.data_editor(
         growth,
         use_container_width=True,
         num_rows="dynamic",
         column_config={
-            "Industry": st.column_config.TextColumn(help="Top-level category"),
-            "Sector": st.column_config.TextColumn(help="Specific segment"),
-            "YoY_Growth_%": st.column_config.NumberColumn(format="%.1f", help="Expected yearly growth %"),
+            "Industry": st.column_config.TextColumn(help="Top-level category (required)"),
+            "Sector": st.column_config.TextColumn(help="Specific segment (required)"),
+            "YoY_Growth_%": st.column_config.NumberColumn(format="%.1f", help="Expected yearly growth % (-50 to +100)"),
         }
     )
     if st.button("💾 Save growth table"):
+        original_count = len(edited)
         save_growth_table(edited)
-        st.success("Saved.")
+        saved = load_growth_table()
+        removed = original_count - len(saved)
+        if removed > 0:
+            st.warning(f"Removed {removed} invalid row(s) (empty fields or growth outside -50% to +100% range).")
+        st.success(f"Saved {len(saved)} valid entries.")
+        st.rerun()
 
     st.divider()
     st.subheader("Symbol Overrides (manual mapping)")
