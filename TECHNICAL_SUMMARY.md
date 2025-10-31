@@ -41,8 +41,8 @@ investor-copilot-v01/
 │   ├── industry_growth.csv         # Sector YoY growth rates (user-editable, persistent)
 │   ├── portfolio_history.csv       # Daily snapshots
 │   └── cache/
-│       ├── prices_cache.json       # Daily price cache (24h TTL)
-│       └── fx_cache.json           # Daily FX rate cache (6h TTL planned)
+│       ├── prices_cache.json       # Daily price cache (24h TTL) ✅
+│       └── fx_cache.json           # FX rate cache (6h TTL) ✅ Oct 31, 2025
 └── output/
     └── analysis/
         └── {month}/
@@ -152,14 +152,15 @@ investor-copilot-v01/
 **Files**: `data/cache/prices_cache.json`, `data/cache/fx_cache.json`
 
 ```python
-load_daily_cache(cache_file: Path) -> dict
+load_daily_cache(cache_file: Path, ttl_hours=24) -> dict
 save_daily_cache(cache_file: Path, data: dict)
 ```
-- **Price Cache**: 24-hour TTL (loads if date == today)
-- **FX Cache**: 6-hour TTL (planned optimization)
-- First app open of day: fetches from Marketstack
+- **Price Cache**: 24-hour TTL ✅
+- **FX Cache**: 6-hour TTL ✅ (Implemented Oct 31, 2025)
+- First app open: fetches from Marketstack
 - Subsequent reloads: uses cached data (no API calls)
-- Next day: auto-expires, fresh fetch on first load
+- Auto-expires after TTL, fresh fetch on next load
+- Uses timestamp-based expiration (not date-based) for precision
 
 ### 2. Price Fetching
 ```python
@@ -175,7 +176,7 @@ fetch_eod_prices(symbols, marketstack_key) -> dict[str, float]
 fetch_fx_map_eur(marketstack_key) -> dict[str, float]
 ```
 **Triple Fallback**:
-1. **Marketstack**: EURUSD, EURGBP, EURCHF latest EOD (6h cache planned)
+1. **Marketstack**: EURUSD, EURGBP, EURCHF latest EOD (6h cache ✅ Oct 31, 2025)
 2. **Frankfurter API**: ECB rates if Marketstack fails
 3. **Emergency Defaults**: USD=0.92, GBP=0.85, CHF=1.05
 
@@ -216,21 +217,25 @@ Autocomplete search returning:
 - Sector (if available)
 - Currency
 
-### 7. Smart Target Calculation (Planned Enhancement)
+### 7. Smart Target Calculation ✅ (EAGR Blended Formula - Implemented Oct 31, 2025)
 ```python
-calc_targets(p0, t1, sector_growth, r52w) -> tuple[float, float, float, float]
+calc_eagr_targets(current_price, target_1y, sector_growth_pct, r52w_pct=None) -> tuple[float, float, float, float]
 ```
 **Blended Growth Approach**:
-- `EAGR` (Effective Annual Growth Rate) = 0.7 × sector_growth + 0.3 × r52w
-- Bounded: -10% to +25% annually
-- If 52W history < 3 months → fallback to sector CAGR only
-- `g1_smooth` = 0.6 × (user_t1/p0 - 1) + 0.4 × EAGR
-- `t1_final` = p0 × (1 + g1_smooth)
-- Multi-year targets: t3 = t1 × (1+EAGR)², t5 = t1 × (1+EAGR)⁴, t10 = t1 × (1+EAGR)⁹
+- `EAGR` (Enhanced Annual Growth Rate) = **0.7 × sector_growth + 0.3 × r52w_momentum**
+- Bounded: **-10% to +25%** annually (prevents unrealistic projections)
+- If r52w_pct missing → fallback to sector growth
+- `g1` = (target_1y / current_price) - 1
+- `g1_smooth` = **0.6 × g1 + 0.4 × EAGR** (blends user target with EAGR)
+- `t1_final` = current_price × (1 + g1_smooth)
+- Multi-year targets: 
+  - **t3 = t1 × (1+EAGR)²**  (2 years after year 1)
+  - **t5 = t1 × (1+EAGR)⁴**  (4 years after year 1)
+  - **t10 = t1 × (1+EAGR)⁹** (9 years after year 1)
 
-**Current**: Uses sector growth only. **Planned**: Blend with 52W momentum.
+**Implementation**: Fetches 52-week high/low data, calculates momentum, applies blended formula to all watchlist targets.
 
-### 7. CSV Import Intelligence
+### 8. CSV Import Intelligence
 ```python
 detect_csv_format(file_content) -> tuple[str, str]
 read_csv_smart(uploaded_file) -> tuple[DataFrame, str, str]
@@ -308,15 +313,19 @@ show_column_mapping_ui(uploaded_df, expected_cols, csv_type) -> DataFrame
 - **Auto-calculate buy ranges**: Buy_Low = price × 0.9, Buy_High = price × 1.1
 - **Auto-calculate targets** from sector growth rates:
   - Target_1Y: Current price × (1 + sector_growth) — *user-editable*
-  - Target_3Y: Target_1Y × (1 + EAGR)² — *auto*
-  - Target_5Y: Target_1Y × (1 + EAGR)⁴ — *auto*
-  - Target_10Y: Target_1Y × (1 + EAGR)⁹ — *auto*
-  - **Planned**: Blend sector growth with 52W momentum (EAGR formula)
+  - Target_3Y: Target_1Y × (1 + EAGR)² — *auto* ✅
+  - Target_5Y: Target_1Y × (1 + EAGR)⁴ — *auto* ✅
+  - Target_10Y: Target_1Y × (1 + EAGR)⁹ — *auto* ✅
+  - **✅ Implemented Oct 31, 2025**: EAGR formula blends sector growth (70%) + 52W momentum (30%)
 - Edit targets manually (1Y target affects 3/5/10Y calculations)
 - **Filter** by sector, currency, search text, or "Near Buy Zone"
 - **Sortable columns** (st.dataframe - click headers)
 - **Add symbol overrides** for missing prices (in-expander form)
-- **Color-coded heatmap** for opportunity zones (planned)
+- **✅ Color-coded heatmap** for opportunity zones (Implemented Oct 31, 2025):
+  - 🟢 **Green**: Near buy zone (within 5% of Buy High) - Actionable buys
+  - 🟡 **Gold**: Moderate upside (10-20% to 1Y target) - Watch closely
+  - 🔴 **Red**: Overvalued (price above 1Y target) - Consider selling
+  - ⚪ **White**: Normal (>20% upside) - Hold/monitor
 
 **Auto-Calculations**:
 - **Buy Low**: Current price × 0.9
@@ -884,14 +893,19 @@ Energy,Renewable,Solar,0.12
 ### Version Control
 - Git repository: `investor-copilot-v01`
 - GitHub: `andreasilvestrin993-netizen/investor-copilot-v01`
-- Recent commits: Daily caching, watchlist cleanup, UI fixes
+- Recent commits: 
+  - Oct 31, 2025: EAGR formula implemented ✅
+  - Oct 31, 2025: 6h FX cache TTL ✅
+  - Oct 31, 2025: Color-coded watchlist heatmap ✅
+  - Oct 31, 2025: Industry growth validation rules
+  - Oct 31, 2025: Daily caching, watchlist cleanup, UI fixes
 
 ### Known Issues
 - None reported (all critical bugs fixed)
 
 ---
 
-**Document Version**: 2.0  
-**Last Updated**: October 31, 2025  
+**Document Version**: 2.1  
+**Last Updated**: October 31, 2025 (v1.0 core features complete)  
 **Author**: AI Assistant (GitHub Copilot)  
-**Status**: Updated with planned enhancements and roadmap
+**Status**: Phase 1 critical features implemented (EAGR, 6h FX, heatmap)
