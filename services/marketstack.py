@@ -7,16 +7,16 @@ from datetime import datetime
 import time
 import pandas as pd
 
-from config.settings import DATA_DIR
+from config.settings import (
+    DATA_DIR, 
+    FX_CACHE_FILE, 
+    PRICES_CACHE_FILE, 
+    OVERRIDES_CSV, 
+    OVERRIDE_COLS
+)
 from utils.cache import save_daily_cache
 from utils.sector_utils import map_industry_to_sector
 from utils.csv_utils import load_csv, save_csv
-
-# Cache files
-FX_CACHE_FILE = DATA_DIR / "fx_cache.json"
-PRICES_CACHE_FILE = DATA_DIR / "prices_cache.json"
-OVERRIDES_CSV = DATA_DIR / "symbol_overrides.csv"
-OVERRIDE_COLS = ["UserSymbol", "ProviderSymbol", "ProviderCurrency"]
 
 def ms_get(url, params):
     """Generic helper for Marketstack GET with query params"""

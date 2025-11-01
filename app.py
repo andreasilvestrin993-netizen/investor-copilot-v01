@@ -34,11 +34,12 @@ from utils.sector_utils import (
 from utils.helpers import get_secret, fmt_price, guess_week_folder, month_folder
 from services.marketstack import (
     fetch_fx_map_eur, fetch_eod_prices, fetch_52week_data,
-    resolve_provider_symbol, search_companies, to_eur
+    resolve_provider_symbol, search_companies, to_eur,
+    load_overrides, save_override, search_alternative_symbols, pick_best_alt
 )
 from services.youtube_service import (
     is_video_url, extract_video_id, resolve_channel_id,
-    fetch_latest_from_channel, fetch_transcript_text
+    fetch_latest_from_channel, fetch_transcript_text, channel_rss_url
 )
 from services.openai_service import summarize_texts
 
@@ -83,94 +84,6 @@ if 'upload_type' not in st.session_state:
     st.session_state.upload_type = None
 if 'csv_format_info' not in st.session_state:
     st.session_state.csv_format_info = None
-
-# ----------------------------
-# All utility functions moved to modular imports above
-# ----------------------------
-
-from services.marketstack import fetch_eod_prices as _ms_fetch_eod_prices
-
-def fetch_eod_prices(symbols, marketstack_key: str) -> dict:
-    return _ms_fetch_eod_prices(symbols, marketstack_key)
-
-from services.marketstack import fetch_52week_data as _ms_fetch_52w
-
-def fetch_52week_data(symbols, marketstack_key: str) -> dict:
-    return _ms_fetch_52w(symbols, marketstack_key)
-
-from services.marketstack import search_alternative_symbols as _ms_search_alts
-
-def search_alternative_symbols(query: str, marketstack_key: str, limit=5):
-    return _ms_search_alts(query, marketstack_key, limit)
-
-from services.marketstack import pick_best_alt as _ms_pick_best_alt
-
-def pick_best_alt(symbol_row, name_hint=None):
-    return _ms_pick_best_alt(symbol_row, name_hint)
-
-from services.marketstack import load_overrides as _ms_load_overrides
-
-def load_overrides():
-    return _ms_load_overrides()
-
-from services.marketstack import save_override as _ms_save_override
-
-def save_override(user_symbol: str, provider_symbol: str, provider_ccy: str):
-    return _ms_save_override(user_symbol, provider_symbol, provider_ccy)
-
-from services.marketstack import resolve_provider_symbol as _ms_resolve
-
-def resolve_provider_symbol(user_symbol: str, name_hint: str, ccy: str, marketstack_key: str, prices_cache: dict, auto_save: bool = False) -> tuple[str,str]:
-    return _ms_resolve(user_symbol, name_hint, ccy, marketstack_key, prices_cache, auto_save)
-
-from services.marketstack import search_companies as _ms_search_companies
-
-def search_companies(query: str, marketstack_key: str, limit=10):
-    return _ms_search_companies(query, marketstack_key, limit)
-
-from services.marketstack import to_eur as _ms_to_eur
-
-def to_eur(amount, ccy, fx_map):
-    return _ms_to_eur(amount, ccy, fx_map)
-
-# ----------------------------
-# YouTube helpers (RSS + transcript; no Google API)
-# ----------------------------
-from services.youtube_service import is_video_url as _yt_is_video_url
-
-def is_video_url(url: str) -> bool:
-    return _yt_is_video_url(url)
-
-from services.youtube_service import extract_video_id as _yt_extract_video_id
-
-def extract_video_id(url: str) -> str | None:
-    return _yt_extract_video_id(url)
-
-def channel_rss_url(channel_id: str) -> str:
-    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-
-from services.youtube_service import resolve_channel_id as _yt_resolve_channel_id
-
-def resolve_channel_id(channel_url_or_handle: str) -> str | None:
-    return _yt_resolve_channel_id(channel_url_or_handle)
-
-from services.youtube_service import fetch_latest_from_channel as _yt_fetch_latest
-
-def fetch_latest_from_channel(channel_id: str, since_date: date) -> list[dict]:
-    return _yt_fetch_latest(channel_id, since_date)
-
-from services.youtube_service import fetch_transcript_text as _yt_fetch_transcript
-
-def fetch_transcript_text(video_id: str) -> str | None:
-    return _yt_fetch_transcript(video_id)
-
-# ----------------------------
-# OpenAI summarization (delegated to service)
-# ----------------------------
-from services.openai_service import summarize_texts as _summarize_texts_service
-
-def summarize_texts(texts: list[str], openai_key: str, date_str: str, mode="daily"):
-    return _summarize_texts_service(texts, openai_key, date_str, mode)
 
 # ----------------------------
 # Streamlit UI
