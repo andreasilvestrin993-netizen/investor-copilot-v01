@@ -306,11 +306,10 @@ with tabs[0]:
 
         # Save daily snapshot
         try:
-            import sys
-            sys.path.insert(0, str(APP_DIR / "utils"))
-            from portfolio_history import save_daily_snapshot, load_portfolio_history
+            # Use packaged utils module directly (no sys.path hacks)
+            from utils.portfolio_history import save_daily_snapshot, load_portfolio_history
             save_daily_snapshot(total_val_eur, total_pnl_eur, pnl_pct, DATA_DIR)
-        except:
+        except Exception:
             pass  # Silently fail if history module not available
 
         # Top metrics

@@ -21,6 +21,11 @@ CACHE_DIR.mkdir(exist_ok=True)
 PRICES_CACHE_FILE = CACHE_DIR / "prices_cache.json"
 FX_CACHE_FILE = CACHE_DIR / "fx_cache.json"
 
+# Cache TTLs (in hours)
+# Prices update daily; FX is more volatile
+PRICES_CACHE_TTL = 24
+FX_CACHE_TTL = 6
+
 # CSV file paths
 PORTFOLIO_CSV = DATA_DIR / "portfolio.csv"
 WATCHLIST_CSV = DATA_DIR / "watchlists.csv"
