@@ -948,18 +948,6 @@ with tabs[1]:
             display_df = port.copy()
             if not MARKETSTACK_KEY:
                 st.warning("⚠️ Marketstack API key missing. Add it in the sidebar to fetch current prices.")
-            provs, pccys, mults, last_eurs = [], [], [], []
-        
-        # Create editable version - allow editing core fields
-        editable_df = display_df.copy()
-        
-        # Make calculated columns read-only by moving them after editing
-        editable_columns = ["Name", "Symbol", "Quantity", "BEP", "Sector", "Currency"]
-        readonly_columns = ["Current Price (EUR)", "Value (EUR)", "P/L (EUR)", "P/L %"]
-        
-        # Reorder for better UX: editable first, then readonly
-        column_order = editable_columns + readonly_columns
-        editable_df = editable_df[column_order]
         
         st.write("**📊 Portfolio Holdings** - Click column headers to sort")
         
