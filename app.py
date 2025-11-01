@@ -8,79 +8,51 @@ import streamlit as st
 import pandas as pd
 import requests
 import plotly.express as px
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from docx import Document
 from dotenv import load_dotenv
+
+# ----------------------------
+# Modular imports
+# ----------------------------
+from config.settings import (
+    APP_DIR, DATA_DIR, OUTPUT_DIR, CACHE_DIR, BASE_CCY, CFG,
+    PRICES_CACHE_FILE, FX_CACHE_FILE, PRICES_CACHE_TTL, FX_CACHE_TTL,
+    IND_GROWTH_CSV, PORTFOLIO_CSV, WATCHLIST_CSV, OVERRIDES_CSV,
+    PORTFOLIO_COLS, WATCHLIST_COLS, OVERRIDE_COLS
+)
+from utils.cache import load_daily_cache, save_daily_cache
+from utils.calculations import calc_eagr_targets, format_price, format_percent, format_quantity
+from utils.formatters import format_percentage, format_large_number, clamp_format_number, fmt_pct
+from utils.csv_utils import (
+    detect_csv_format, read_csv_smart, show_column_mapping_ui,
+    ensure_columns, load_csv, save_csv, write_docx
+)
+from utils.sector_utils import (
+    get_sector_list, map_industry_to_sector, load_growth_table, save_growth_table,
+    init_industry_growth_csv
+)
+from utils.helpers import get_secret, fmt_price, guess_week_folder, month_folder
+from services.marketstack import (
+    fetch_fx_map_eur, fetch_eod_prices, fetch_52week_data,
+    resolve_provider_symbol, search_companies, to_eur
+)
+from services.youtube_service import (
+    is_video_url, extract_video_id, resolve_channel_id,
+    fetch_latest_from_channel, fetch_transcript_text
+)
+from services.openai_service import summarize_texts
 
 # ----------------------------
 # Bootstrap
 # ----------------------------
 load_dotenv()
-APP_DIR = Path(__file__).parent.resolve()
-DATA_DIR = (APP_DIR / "data"); DATA_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR = (APP_DIR / "output"); OUTPUT_DIR.mkdir(exist_ok=True)
 
-def read_yaml(path: Path):
-    try:
-        import yaml
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except Exception:
-        return {}
-CFG = read_yaml(APP_DIR / "config.yaml")
+# Initialize industry growth CSV if needed
+init_industry_growth_csv()
 
-BASE_CCY = "EUR"  # hard-enforced base currency display
-
-# Daily cache files for prices and FX rates
-CACHE_DIR = DATA_DIR / "cache"
-CACHE_DIR.mkdir(exist_ok=True)
-PRICES_CACHE_FILE = CACHE_DIR / "prices_cache.json"
-FX_CACHE_FILE = CACHE_DIR / "fx_cache.json"
-
-# Cache TTL settings (in hours)
-PRICES_CACHE_TTL = 24  # 24 hours for prices
-FX_CACHE_TTL = 6       # 6 hours for FX rates (more volatile)
-
-def load_daily_cache(cache_file: Path, ttl_hours=24):
-    """
-    Load cache if it's within TTL, otherwise return empty dict
-    
-    Args:
-        cache_file: Path to cache file
-        ttl_hours: Time-to-live in hours (default 24)
-    """
-    if not cache_file.exists():
-        return {}
-    
-    try:
-        with open(cache_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Check if cache is within TTL
-        cache_timestamp = data.get('timestamp')
-        if cache_timestamp:
-            cache_time = datetime.fromisoformat(cache_timestamp)
-            now = datetime.now()
-            hours_diff = (now - cache_time).total_seconds() / 3600
-            
-            if hours_diff <= ttl_hours:
-                return data.get('data', {})
-        
-        return {}
-    except Exception:
-        return {}
-
-def save_daily_cache(cache_file: Path, data: dict):
-    """Save cache with current timestamp"""
-    try:
-        cache_data = {
-            'timestamp': datetime.now().isoformat(),
-            'data': data
-        }
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, indent=2)
-    except Exception as e:
-        pass  # Silent fail for cache save errors
+# Initialize overrides CSV if needed
+if not OVERRIDES_CSV.exists():
+    pd.DataFrame(columns=OVERRIDE_COLS).to_csv(OVERRIDES_CSV, index=False)
 
 # Session state for performance caching
 if 'symbol_cache' not in st.session_state:
@@ -113,891 +85,92 @@ if 'csv_format_info' not in st.session_state:
     st.session_state.csv_format_info = None
 
 # ----------------------------
-# Formatting utilities
+# All utility functions moved to modular imports above
 # ----------------------------
-def format_price(value, currency="EUR"):
-    """Format price to 2 decimals with currency symbol"""
-    if value is None or pd.isna(value):
-        return "-"
-    return f"€{value:.2f}" if currency == "EUR" else f"{value:.2f}"
 
-def format_percentage(value):
-    """Format percentage to 1 decimal"""
-    if value is None or pd.isna(value):
-        return "-"
-    return f"{value:.1f}%"
-
-def format_large_number(value):
-    """Format large numbers with M/K suffixes"""
-    if value is None or pd.isna(value):
-        return "-"
-    
-    abs_value = abs(value)
-    if abs_value >= 1_000_000:
-        return f"€{value/1_000_000:.1f}M"
-    elif abs_value >= 1_000:
-        return f"€{value/1_000:.1f}K"
-    else:
-        return f"€{value:.2f}"
-
-# ----------------------------
-# Files (CSV "DB")
-# ----------------------------
-IND_GROWTH_CSV = DATA_DIR / "industry_growth.csv"
-PORTFOLIO_CSV   = DATA_DIR / "portfolio.csv"
-WATCHLIST_CSV   = DATA_DIR / "watchlists.csv"
-OVERRIDES_CSV   = DATA_DIR / "symbol_overrides.csv"
-
-PORTFOLIO_COLS = ["Name","Symbol","Quantity","BEP","Sector","Currency"]
-WATCHLIST_COLS = ["Name","Symbol","Sector","Currency","Buy_Low","Buy_High","Target_1Y","Target_3Y","Target_5Y","Target_10Y"]
-OVERRIDE_COLS  = ["UserSymbol","ProviderSymbol","ProviderCurrency"]
-
-# ----------------------------
-# Seed Industry->Sector growth table on first run
-# ----------------------------
-if not IND_GROWTH_CSV.exists():
-    seed = pd.DataFrame([
-        # Technology (≤10 industries total, ≤6 sectors each across whole app)
-        ["Technology","AI & Machine Learning",30.0],
-        ["Technology","Cloud Infrastructure & Services",27.0],
-        ["Technology","Cybersecurity",15.0],
-        ["Technology","Software (Applications & DevOps)",12.5],
-        ["Technology","Semiconductors",10.5],
-        ["Technology","Data Infrastructure (Storage, Networking, CDNs)",23.0],
-        # Energy & Clean Tech
-        ["Energy & Clean Tech","EV & Battery Systems",12.0],
-        ["Energy & Clean Tech","Solar & Wind Power",11.0],
-        ["Energy & Clean Tech","Hydrogen & Fuel Cells",8.0],
-        ["Energy & Clean Tech","Nuclear Energy (incl. SMRs, Uranium)",9.0],
-        ["Energy & Clean Tech","Utilities & Grid Tech",5.0],
-        ["Energy & Clean Tech","Renewable Infrastructure",8.5],
-        # Industrials
-        ["Industrials","Aerospace & Defense",11.0],
-        ["Industrials","Advanced Manufacturing & Equipment",7.5],
-        ["Industrials","Construction & Engineering",4.5],
-        ["Industrials","Security & Infrastructure",6.5],
-        ["Industrials","Water & Environmental Systems",5.0],
-        # Automotive & Mobility
-        ["Automotive & Mobility","EV Manufacturers",11.0],
-        ["Automotive & Mobility","Autonomous Vehicles & Lidar",14.0],
-        ["Automotive & Mobility","Urban Air Mobility (eVTOL, Drones)",15.0],
-        ["Automotive & Mobility","Telematics & Mobility Tech",10.0],
-        # Financial Services
-        ["Financial Services","Fintech & Neo-Banks",10.0],
-        ["Financial Services","Trading Platforms & Exchanges",8.0],
-        ["Financial Services","Crypto Infrastructure",20.0],
-        ["Financial Services","AI-based Financial Services",15.0],
-        # Healthcare & Life Sciences
-        ["Healthcare & Life Sciences","Biotechnology & Genomics",12.0],
-        ["Healthcare & Life Sciences","Medical Devices & Diagnostics",8.5],
-        ["Healthcare & Life Sciences","Healthcare Software & Analytics",10.0],
-        ["Healthcare & Life Sciences","Pharmaceuticals",6.0],
-        # Consumer Tech & Digital Media
-        ["Consumer Tech & Digital Media","E-Commerce Platforms",9.5],
-        ["Consumer Tech & Digital Media","Social Media & Content",4.0],
-        ["Consumer Tech & Digital Media","Gaming & Interactive Media",5.0],
-        ["Consumer Tech & Digital Media","Consumer Electronics",4.5],
-        # Telecom & Connectivity
-        ["Telecom & Connectivity","Communication Infrastructure",5.5],
-        ["Telecom & Connectivity","Networking & 5G Tech",8.5],
-        ["Telecom & Connectivity","Telecom Services",4.5],
-        # Materials & Mining
-        ["Materials & Mining","Lithium & Battery Materials",9.0],
-        ["Materials & Mining","Rare Earths & Advanced Materials",7.0],
-        ["Materials & Mining","Uranium & Nuclear Fuel Supply",8.5],
-        # Real Estate & Infrastructure
-        ["Real Estate & Infrastructure","Data Centers",10.0],
-        ["Real Estate & Infrastructure","Smart Infrastructure",7.5],
-        ["Real Estate & Infrastructure","Real Estate Tech & Services",5.5],
-    ], columns=["Industry","Sector","YoY_Growth_%"])
-    seed.to_csv(IND_GROWTH_CSV, index=False)
-
-# Get unique sectors from industry_growth
-def get_sector_list():
-    """Get list of all sectors from industry_growth.csv"""
-    growth_df = load_csv(IND_GROWTH_CSV, ["Industry","Sector","YoY_Growth_%"])
-    sectors = sorted(growth_df["Sector"].unique().tolist())
-    return sectors
-
-# Map industry/sector names to simplified categories
-SECTOR_MAPPING = {
-    "Technology": ["Technology", "AI & Machine Learning", "Cloud Infrastructure", "Software", "Semiconductors"],
-    "Energy & Clean Tech": ["Energy", "Renewable", "Solar", "Wind", "Nuclear"],
-    "Automotive & Mobility": ["Automotive", "EV", "Electric Vehicle", "Mobility"],
-    "Financial Services": ["Finance", "Fintech", "Banking", "Insurance"],
-    "Healthcare & Life Sciences": ["Healthcare", "Biotech", "Pharma", "Medical"],
-    "Consumer Tech & Digital Media": ["Consumer", "E-Commerce", "Media", "Gaming"],
-    "Telecom & Connectivity": ["Telecom", "Communication", "5G"],
-    "Industrials": ["Industrial", "Manufacturing", "Aerospace"],
-    "Materials & Mining": ["Materials", "Mining", "Metals"],
-    "Real Estate & Infrastructure": ["Real Estate", "Infrastructure", "Construction"]
-}
-
-def map_industry_to_sector(industry_text):
-    """Map Marketstack industry to our sector list"""
-    if not industry_text:
-        return None
-    
-    industry_lower = industry_text.lower()
-    
-    # Direct match first
-    sectors = get_sector_list()
-    for sector in sectors:
-        if sector.lower() in industry_lower or industry_lower in sector.lower():
-            return sector
-    
-    # Keyword mapping
-    for sector, keywords in SECTOR_MAPPING.items():
-        for keyword in keywords:
-            if keyword.lower() in industry_lower:
-                return sector
-    
-    return None
-
-# Ensure overrides file exists
-if not OVERRIDES_CSV.exists():
-    pd.DataFrame(columns=OVERRIDE_COLS).to_csv(OVERRIDES_CSV, index=False)
-
-# ----------------------------
-# Helpers
-# ----------------------------
-def get_secret(name, default=""):
-    return os.getenv(name, default)
-
-def clamp_format_number(x):
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
-        return "-"
-    n = float(x); absn = abs(n)
-    if absn >= 1_000_000_000: return f"{n/1_000_000_000:.0f}B"
-    if absn >= 1_000_000:     return f"{n/1_000_000:.0f}M"
-    if absn >= 1_000:         return f"{n/1_000:.0f}K"
-    return f"{int(round(n,0))}"
-
-def fmt_pct(x):
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
-        return "-"
-    return f"{x:.1f}%"
-
-# ----------------------------
-# CSV Format Detection & Parsing
-# ----------------------------
-def detect_csv_format(file_content):
-    """
-    Detect if CSV uses European format (semicolon delimiter, comma decimal separator)
-    or standard format (comma delimiter, dot decimal separator).
-    Returns (delimiter, decimal_separator)
-    """
-    # Read first few lines to detect format
-    first_lines = file_content[:2000]  # Check first 2000 chars
-    
-    # Count delimiters
-    semicolon_count = first_lines.count(';')
-    comma_count = first_lines.count(',')
-    
-    # European format typically has more semicolons than commas in header/data
-    # (semicolons separate columns, commas are in decimal numbers)
-    if semicolon_count > comma_count:
-        return ';', ','  # European format
-    else:
-        return ',', '.'  # Standard format
-
-def read_csv_smart(uploaded_file):
-    """
-    Smart CSV reader that handles both European and standard formats.
-    Returns DataFrame with properly parsed numeric values.
-    """
-    # Read file content
-    file_content = uploaded_file.getvalue().decode('utf-8')
-    
-    # Detect format
-    delimiter, decimal_sep = detect_csv_format(file_content)
-    
-    # Reset file pointer
-    uploaded_file.seek(0)
-    
-    # Read CSV with detected format - explicitly set index_col=False to prevent first column being used as index
-    if decimal_sep == ',':
-        # European format: need to convert commas to dots in numeric columns
-        df = pd.read_csv(uploaded_file, sep=delimiter, dtype=str, na_values=['', 'None', 'NaN', 'null'], index_col=False)
-        
-        # Convert numeric columns: replace comma with dot
-        for col in df.columns:
-            # Try to detect if column contains numeric data with commas
-            if df[col].dtype == 'object':
-                # Check if values look like European decimals (e.g., "123,45")
-                sample = df[col].dropna().head(10)
-                if len(sample) > 0:
-                    # If any value contains comma followed by digits, treat as European decimal
-                    if any(pd.notna(val) and isinstance(val, str) and re.search(r',\d', val) for val in sample):
-                        df[col] = df[col].str.replace(',', '.', regex=False)
-    else:
-        # Standard format
-        df = pd.read_csv(uploaded_file, sep=delimiter, dtype=str, na_values=['', 'None', 'NaN', 'null'], index_col=False)
-    
-    return df, delimiter, decimal_sep
-
-# ----------------------------
-# Column Mapping UI
-# ----------------------------
-def show_column_mapping_ui(uploaded_df, expected_cols, csv_type="portfolio", csv_format_info=None):
-    """
-    Show column mapping interface for CSV uploads.
-    Returns mapped DataFrame if confirmed, None if still mapping.
-    """
-    st.info(f"📋 **Column Mapping for {csv_type.title()}**")
-    
-    # Show detected format
-    if csv_format_info:
-        delimiter, decimal_sep = csv_format_info
-        format_type = "European (semicolon delimiter, comma decimal)" if delimiter == ';' else "Standard (comma delimiter, dot decimal)"
-        st.success(f"✓ Detected CSV format: **{format_type}**")
-    
-    st.write("Map your CSV columns to the expected format:")
-    
-    # Get uploaded CSV columns
-    uploaded_cols = uploaded_df.columns.tolist()
-    
-    # Create mapping interface
-    mapping = {}
-    st.write("**Your CSV columns → Expected columns:**")
-    
-    col1, col2, col3 = st.columns([2, 1, 2])
-    with col1:
-        st.write("**Your CSV Column**")
-    with col2:
-        st.write("**→**")
-    with col3:
-        st.write("**Maps to Expected Column**")
-    
-    # Create mapping dropdowns for each expected column
-    for i, expected_col in enumerate(expected_cols):
-        col1, col2, col3 = st.columns([2, 1, 2])
-        
-        with col1:
-            # Try to find best match
-            best_match = None
-            expected_lower = expected_col.lower().replace("_", "").replace(" ", "")
-            
-            for uploaded_col in uploaded_cols:
-                uploaded_lower = uploaded_col.lower().replace("_", "").replace(" ", "")
-                if expected_lower == uploaded_lower:
-                    best_match = uploaded_col
-                    break
-            
-            # If no exact match, try partial match
-            if not best_match:
-                for uploaded_col in uploaded_cols:
-                    uploaded_lower = uploaded_col.lower().replace("_", "").replace(" ", "")
-                    if expected_lower in uploaded_lower or uploaded_lower in expected_lower:
-                        best_match = uploaded_col
-                        break
-            
-            # Default to first column if still no match
-            if not best_match and uploaded_cols:
-                best_match = uploaded_cols[0] if i < len(uploaded_cols) else uploaded_cols[0]
-            
-            default_idx = uploaded_cols.index(best_match) if best_match in uploaded_cols else 0
-            
-            selected = st.selectbox(
-                f"Column for '{expected_col}'",
-                options=["(skip)"] + uploaded_cols,
-                index=default_idx + 1 if best_match else 0,
-                key=f"map_{csv_type}_{i}",
-                label_visibility="collapsed"
-            )
-            
-            if selected != "(skip)":
-                mapping[expected_col] = selected
-        
-        with col2:
-            st.write("→")
-        
-        with col3:
-            st.write(f"**{expected_col}**")
-    
-    # Create preview DataFrame based on current mapping
-    preview_df = pd.DataFrame()
-    for expected_col, uploaded_col in mapping.items():
-        if uploaded_col in uploaded_df.columns:
-            preview_df[expected_col] = uploaded_df[uploaded_col]
-    
-    # Fill missing columns with empty values for preview
-    for col in expected_cols:
-        if col not in preview_df.columns:
-            preview_df[col] = None
-    
-    # Show live preview with mapped columns
-    with st.expander("📊 Preview mapped data (first 5 rows)", expanded=True):
-        st.caption("This preview updates as you change the column mappings above")
-        st.dataframe(preview_df.head(), use_container_width=True)
-    
-    # Action buttons
-    col_confirm, col_cancel = st.columns(2)
-    
-    with col_confirm:
-        if st.button("✅ Confirm Mapping", type="primary", use_container_width=True):
-            return preview_df
-    
-    with col_cancel:
-        if st.button("❌ Cancel Upload", use_container_width=True):
-            st.session_state.pending_upload = None
-            st.session_state.upload_type = None
-            st.session_state.csv_format_info = None
-            st.rerun()
-    
-    return None
-
-def fmt_price(x):
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
-        return "-"
-    return f"{x:.2f}"
-
-def ensure_columns(df: pd.DataFrame, cols: list):
-    for c in cols:
-        if c not in df.columns:
-            df[c] = None
-    return df[cols]
-
-def load_csv(path, cols):
-    if path.exists():
-        try:
-            # Try to read with semicolon delimiter first (European format)
-            df = pd.read_csv(path, sep=';', index_col=False)
-            # If only one column, try comma delimiter
-            if len(df.columns) == 1:
-                df = pd.read_csv(path, sep=',', index_col=False)
-        except Exception:
-            df = pd.DataFrame(columns=cols)
-        return ensure_columns(df, cols)
-    return pd.DataFrame(columns=cols)
-
-def save_csv(path, df):
-    # Save with semicolon delimiter (European format compatible)
-    df.to_csv(path, index=False, sep=';')
-
-def write_docx(text: str, out_path: Path):
-    doc = Document()
-    for line in text.split("\n"):
-        doc.add_paragraph(line)
-    doc.save(out_path.as_posix())
-
-def guess_week_folder(dt_obj: date):
-    monday = dt_obj - dt.timedelta(days=dt_obj.weekday())
-    friday = monday + dt.timedelta(days=4)
-    return f"{monday.day:02d}-{friday.day:02d} {friday.strftime('%B')} {friday.year}"
-
-def month_folder(dt_obj: date):
-    return f"{dt_obj.strftime('%m.%Y')}"
-
-def load_growth_table():
-    return pd.read_csv(IND_GROWTH_CSV)[["Industry","Sector","YoY_Growth_%"]]
-
-def save_growth_table(df):
-    """Save industry growth table with validation rules"""
-    # Validation: Remove rows with any empty values
-    df_clean = df.dropna(subset=["Industry", "Sector", "YoY_Growth_%"])
-    
-    # Validation: Remove rows where any field is empty string
-    df_clean = df_clean[
-        (df_clean["Industry"].str.strip() != "") & 
-        (df_clean["Sector"].str.strip() != "") &
-        (df_clean["YoY_Growth_%"].notna())
-    ]
-    
-    # Validation: Ensure growth is numeric and reasonable (-50 to +100%)
-    df_clean["YoY_Growth_%"] = pd.to_numeric(df_clean["YoY_Growth_%"], errors='coerce')
-    df_clean = df_clean[
-        (df_clean["YoY_Growth_%"] >= -50) & 
-        (df_clean["YoY_Growth_%"] <= 100)
-    ]
-    
-    df_clean[["Industry","Sector","YoY_Growth_%"]].to_csv(IND_GROWTH_CSV, index=False)
-
-def calc_eagr_targets(current_price, target_1y, sector_growth_pct, r52w_pct=None):
-    """
-    Calculate multi-year targets using EAGR (Enhanced Annual Growth Rate).
-    Blends sector growth (70%) with 52-week momentum (30%).
-    
-    Args:
-        current_price: Current stock price
-        target_1y: User's 1-year target (can be manually adjusted)
-        sector_growth_pct: Sector YoY growth rate (as percentage, e.g., 15.0 for 15%)
-        r52w_pct: 52-week price change (as percentage, optional)
-    
-    Returns:
-        tuple: (target_1y_adjusted, target_3y, target_5y, target_10y)
-    """
-    if not current_price or current_price <= 0:
-        return None, None, None, None
-    
-    if not target_1y or target_1y <= 0:
-        return None, None, None, None
-    
-    # If no 52W momentum data, use sector growth
-    if r52w_pct is None:
-        r52w_pct = sector_growth_pct
-    
-    # Clamp 52W momentum to reasonable range (-50% to +50%)
-    r52w_pct = max(min(r52w_pct, 50), -50)
-    
-    # Calculate EAGR: 70% sector growth + 30% 52-week momentum
-    eagr_pct = (0.7 * sector_growth_pct) + (0.3 * r52w_pct)
-    
-    # Bound EAGR to -10% to +25%
-    eagr_pct = max(min(eagr_pct, 25), -10)
-    eagr = eagr_pct / 100  # Convert to decimal
-    
-    # Calculate 1Y growth implied by user's target
-    g1 = (target_1y / current_price) - 1
-    
-    # Smooth the 1Y growth: 60% user target + 40% EAGR
-    g1_smooth = (0.6 * g1) + (0.4 * eagr)
-    
-    # Adjusted 1Y target based on smoothing
-    t1_final = round(current_price * (1 + g1_smooth), 2)
-    
-    # Multi-year targets using EAGR compounding
-    t3 = round(t1_final * ((1 + eagr) ** 2), 2)   # 2 years after year 1
-    t5 = round(t1_final * ((1 + eagr) ** 4), 2)   # 4 years after year 1
-    t10 = round(t1_final * ((1 + eagr) ** 9), 2)  # 9 years after year 1
-    
-    return t1_final, t3, t5, t10
-
-
-# ----------------------------
-# Marketstack FX & Prices (EOD) + Fallbacks
-# ----------------------------
-def ms_get(url, params):
-    # Generic helper for Marketstack GET with query params
-    try:
-        r = requests.get(url, params=params, timeout=20)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return {}
-
-def fetch_fx_map_eur(marketstack_key: str) -> dict:
-    """
-    Build FX map to EUR using Marketstack 'tickers/eod/latest' on currency crosses.
-    We compute:
-      USD->EUR  from EURUSD (so 1 USD = 1 / EURUSD close)
-      GBP->EUR  from EURGBP (so 1 GBP = 1 / EURGBP close)
-      CHF->EUR  from EURCHF (so 1 CHF = 1 / EURCHF close)
-    Cached daily (only fetches once per day). Uses Frankfurter API as fallback.
-    """
-    # Check if cache is from today
-    now = datetime.now()
-    cache_is_today = (st.session_state.last_fx_fetch and 
-                     st.session_state.last_fx_fetch.date() == now.date())
-    
-    if cache_is_today and st.session_state.fx_cache:
-        return st.session_state.fx_cache
-    
-    fx = {"EUR": 1.0}
-    
-    def latest_fx(pair):
-        """Fetch latest FX rate from Marketstack"""
-        if not marketstack_key:
-            return None
-        try:
-            base_url = "https://api.marketstack.com/v1/tickers/{}/eod/latest".format(pair)
-            params = {"access_key": marketstack_key}
-            response = requests.get(base_url, params=params, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                close = data.get("data", {}).get("close")
-                return float(close) if close is not None else None
-        except Exception:
-            pass
-        return None
-
-    # Try Marketstack first
-    eurusd = latest_fx("EURUSD")
-    if eurusd and eurusd > 0:
-        fx["USD"] = 1.0 / eurusd
-
-    eurgbp = latest_fx("EURGBP")
-    if eurgbp and eurgbp > 0:
-        fx["GBP"] = 1.0 / eurgbp
-
-    eurchf = latest_fx("EURCHF")
-    if eurchf and eurchf > 0:
-        fx["CHF"] = 1.0 / eurchf
-
-    # Fallback to Frankfurter API for any missing rates
-    missing = [k for k in ["USD", "GBP", "CHF"] if k not in fx]
-    if missing:
-        try:
-            r = requests.get("https://api.frankfurter.app/latest?from=EUR", timeout=10)
-            if r.status_code == 200:
-                rates = r.json().get("rates", {})
-                for ccy in missing:
-                    if ccy in rates and rates[ccy] > 0:
-                        # rates[ccy] = ccy per 1 EUR; want 1 ccy -> EUR => 1 / rates[ccy]
-                        fx[ccy] = 1.0 / float(rates[ccy])
-        except Exception:
-            pass
-    
-    # Final fallback - use approximate rates only if still missing
-    if "USD" not in fx:
-        fx["USD"] = 0.92  # ~1.09 USD per EUR
-    if "GBP" not in fx:
-        fx["GBP"] = 0.85  # ~1.18 GBP per EUR
-    if "CHF" not in fx:
-        fx["CHF"] = 1.05  # ~0.95 CHF per EUR
-
-    # Derived rates
-    fx["HKD"] = fx.get("USD", 0.92) / 7.8  # HKD pegged to USD
-    fx["CAD"] = fx.get("USD", 0.92) / 1.35
-    fx["SEK"] = fx.get("EUR", 1.0) / 11.5
-    fx["DKK"] = fx.get("EUR", 1.0) / 7.46
-    fx["PLN"] = fx.get("EUR", 1.0) / 4.35
-    
-    # Cache the result and save to disk
-    st.session_state.fx_cache = fx
-    st.session_state.last_fx_fetch = now
-    save_daily_cache(FX_CACHE_FILE, fx)
-    
-    return fx
+from services.marketstack import fetch_eod_prices as _ms_fetch_eod_prices
 
 def fetch_eod_prices(symbols, marketstack_key: str) -> dict:
-    """Return dict {ProviderSymbol: close} using Marketstack EOD latest with daily caching."""
-    if not symbols or not marketstack_key: 
-        return {}
-    
-    # Check if cache is from today
-    now = datetime.now()
-    cache_is_today = (st.session_state.last_price_fetch and 
-                     st.session_state.last_price_fetch.date() == now.date())
-    
-    if cache_is_today:
-        # Return cached prices for requested symbols (from today)
-        cached = {sym: st.session_state.prices_cache.get(sym) for sym in symbols 
-                 if sym in st.session_state.prices_cache}
-        if len(cached) == len([s for s in symbols if s]):  # All symbols found in cache
-            return cached
-    
-    out = {}
-    base_url = "http://api.marketstack.com/v1/eod/latest"
-    # Marketstack allows batching via comma-separated symbols
-    for i in range(0, len(symbols), 80):
-        batch = symbols[i:i+80]
-        data = ms_get(base_url, {"access_key": marketstack_key, "symbols": ",".join(batch)})
-        
-        # Handle API response - data should be a dict with "data" key containing list of items
-        if not isinstance(data, dict):
-            continue
-            
-        data_items = data.get("data", [])
-        if not isinstance(data_items, list):
-            continue
-            
-        for item in data_items:
-            # Skip if item is not a dictionary
-            if not isinstance(item, dict):
-                continue
-                
-            sym = item.get("symbol")
-            close = item.get("close")
-            if sym and close is not None:
-                price = float(close)
-                out[sym] = price
-                # Update cache
-                st.session_state.prices_cache[sym] = price
-        time.sleep(0.2)
-    
-    # Update cache timestamp and save to disk
-    st.session_state.last_price_fetch = now
-    save_daily_cache(PRICES_CACHE_FILE, st.session_state.prices_cache)
-    return out
+    return _ms_fetch_eod_prices(symbols, marketstack_key)
+
+from services.marketstack import fetch_52week_data as _ms_fetch_52w
 
 def fetch_52week_data(symbols, marketstack_key: str) -> dict:
-    """
-    Fetch 52-week high/low for symbols using Marketstack EOD endpoint.
-    Returns dict {symbol: {"high": float, "low": float}}
-    NOTE: This is cached for 24 hours to avoid slow API calls
-    """
-    if not symbols or not marketstack_key:
-        return {}
-    
-    # Check cache (daily expiry for 52w data)
-    cache_key = "week52_cache"
-    cache_time_key = "last_52w_fetch"
-    
-    if cache_key not in st.session_state:
-        st.session_state[cache_key] = {}
-    
-    now = datetime.now()
-    if (cache_time_key in st.session_state and st.session_state[cache_time_key] and
-        (now - st.session_state[cache_time_key]).total_seconds() < 86400):  # 24 hour cache
-        cached = {sym: st.session_state[cache_key].get(sym) for sym in symbols 
-                 if sym in st.session_state[cache_key]}
-        if len(cached) == len([s for s in symbols if s]):
-            return cached
-    
-    # For performance: only fetch 52-week data on-demand, not automatically
-    # Return empty dict - will use current price as fallback
-    return {}
+    return _ms_fetch_52w(symbols, marketstack_key)
+
+from services.marketstack import search_alternative_symbols as _ms_search_alts
 
 def search_alternative_symbols(query: str, marketstack_key: str, limit=5):
-    """
-    Use Marketstack /tickers?search= to find possible provider symbols (alt listings).
-    """
-    base_url = "http://api.marketstack.com/v1/tickers"
-    resp = ms_get(base_url, {"access_key": marketstack_key, "search": query, "limit": limit})
-    return resp.get("data", [])
+    return _ms_search_alts(query, marketstack_key, limit)
+
+from services.marketstack import pick_best_alt as _ms_pick_best_alt
 
 def pick_best_alt(symbol_row, name_hint=None):
-    """
-    Very simple ranking heuristic:
-      - has_eod true
-      - exchange MIC / name present (nice to have)
-      - if name_hint provided, prefer item whose name contains hint tokens
-    """
-    if not symbol_row: return None
-    if name_hint:
-        name_hint_low = name_hint.lower()
-        symbol_row = sorted(symbol_row, key=lambda x: 0 if ((x.get("name") or "").lower().find(name_hint_low) >= 0) else 1)
-    # prefer has_eod
-    symbol_row = sorted(symbol_row, key=lambda x: 0 if x.get("has_eod") else 1)
-    return symbol_row[0]
+    return _ms_pick_best_alt(symbol_row, name_hint)
+
+from services.marketstack import load_overrides as _ms_load_overrides
 
 def load_overrides():
-    return load_csv(OVERRIDES_CSV, OVERRIDE_COLS)
+    return _ms_load_overrides()
+
+from services.marketstack import save_override as _ms_save_override
 
 def save_override(user_symbol: str, provider_symbol: str, provider_ccy: str):
-    """Auto-save a discovered symbol override"""
-    try:
-        overrides = load_overrides()
-        # Check if override already exists
-        existing = overrides[overrides["UserSymbol"].fillna("").str.upper() == user_symbol.upper()]
-        if existing.empty:
-            # Add new override
-            new_row = pd.DataFrame([{
-                "UserSymbol": user_symbol,
-                "ProviderSymbol": provider_symbol,
-                "ProviderCurrency": provider_ccy
-            }])
-            overrides = pd.concat([overrides, new_row], ignore_index=True)
-            save_csv(OVERRIDES_CSV, overrides)
-            return True
-    except Exception as e:
-        st.warning(f"Could not auto-save override for {user_symbol}: {str(e)}")
-    return False
+    return _ms_save_override(user_symbol, provider_symbol, provider_ccy)
+
+from services.marketstack import resolve_provider_symbol as _ms_resolve
 
 def resolve_provider_symbol(user_symbol: str, name_hint: str, ccy: str, marketstack_key: str, prices_cache: dict, auto_save: bool = False) -> tuple[str,str]:
-    """
-    Return (provider_symbol, provider_ccy)
-    Priority:
-      1) Manual override in symbol_overrides.csv (HIGHEST PRIORITY - always check first)
-      2) Direct user_symbol if it prices
-      3) Search by symbol; else search by name hint; pick best; use its 'symbol' (and auto-save if enabled)
-    """
-    # PRIORITY 1: Check overrides FIRST (before cache)
-    overrides = load_overrides()
-    ov = overrides[overrides["UserSymbol"].fillna("").str.upper() == (user_symbol or "").upper()]
-    if not ov.empty:
-        row = ov.iloc[0]
-        psym = (row.get("ProviderSymbol") or "").strip()
-        pccy = (row.get("ProviderCurrency") or ccy or "EUR").strip() or "EUR"
-        return psym or user_symbol, pccy
+    return _ms_resolve(user_symbol, name_hint, ccy, marketstack_key, prices_cache, auto_save)
 
-    # PRIORITY 2: If the direct symbol already priced in cache, use it (only if no override)
-    if user_symbol in prices_cache:
-        return user_symbol, ccy or "EUR"
-
-    # PRIORITY 3: Search by symbol first
-    cand = search_alternative_symbols(user_symbol, marketstack_key, limit=5)
-    best = pick_best_alt(cand, name_hint)
-    if best and best.get("symbol"):
-        found_symbol = best["symbol"]
-        found_ccy = best.get("currency") or ccy or "EUR"
-        # Auto-save the discovered mapping
-        if auto_save and found_symbol != user_symbol:
-            if save_override(user_symbol, found_symbol, found_ccy):
-                st.success(f"✓ Auto-saved override: {user_symbol} → {found_symbol}")
-        return found_symbol, found_ccy
-
-    # Try by name hint if present
-    if name_hint:
-        cand2 = search_alternative_symbols(name_hint, marketstack_key, limit=5)
-        best2 = pick_best_alt(cand2, name_hint)
-        if best2 and best2.get("symbol"):
-            found_symbol = best2["symbol"]
-            found_ccy = best2.get("currency") or ccy or "EUR"
-            # Auto-save the discovered mapping
-            if auto_save and found_symbol != user_symbol:
-                if save_override(user_symbol, found_symbol, found_ccy):
-                    st.success(f"✓ Auto-saved override: {user_symbol} → {found_symbol} (by name)")
-            return found_symbol, found_ccy
-
-    # Give up: return original symbol
-    return user_symbol, ccy or "EUR"
+from services.marketstack import search_companies as _ms_search_companies
 
 def search_companies(query: str, marketstack_key: str, limit=10):
-    """
-    Search for companies by name or symbol using Marketstack API.
-    Returns list of dicts with: name, symbol, sector, currency
-    """
-    if not query or len(query) < 2:
-        return []
-    
-    try:
-        results = search_alternative_symbols(query, marketstack_key, limit=limit)
-        
-        companies = []
-        for item in results:
-            symbol = item.get("symbol", "")
-            name = item.get("name", "")
-            currency = item.get("currency", "EUR")
-            
-            # Try to map Marketstack stock_exchange info to our sector
-            exchange_info = item.get("stock_exchange", {})
-            industry = exchange_info.get("name", "") if isinstance(exchange_info, dict) else ""
-            
-            # Map industry to our sector list
-            sector = map_industry_to_sector(industry)
-            
-            companies.append({
-                "name": name,
-                "symbol": symbol,
-                "sector": sector,
-                "currency": currency,
-                "display": f"{name} ({symbol})"
-            })
-        
-        return companies
-    except Exception as e:
-        st.error(f"Error searching companies: {e}")
-        return []
+    return _ms_search_companies(query, marketstack_key, limit)
+
+from services.marketstack import to_eur as _ms_to_eur
 
 def to_eur(amount, ccy, fx_map):
-    """
-    Central FX converter - converts any amount to EUR.
-    
-    Uses live Marketstack rates (cached 1h) with Frankfurter fallback.
-    All portfolio calculations use this single function to ensure consistency.
-    
-    Args:
-        amount: The amount to convert
-        ccy: Currency code (USD, GBP, CHF, EUR, etc.)
-        fx_map: FX rate map from fetch_fx_map_eur()
-    
-    Returns:
-        Amount in EUR, or None if conversion not possible
-    """
-    if amount is None or pd.isna(amount): 
-        return None
-    if (not ccy) or ccy.upper() == "EUR": 
-        return float(amount)
-    
-    rate = fx_map.get(ccy.upper(), None)
-    return float(amount) * float(rate) if rate else None
+    return _ms_to_eur(amount, ccy, fx_map)
 
 # ----------------------------
 # YouTube helpers (RSS + transcript; no Google API)
 # ----------------------------
+from services.youtube_service import is_video_url as _yt_is_video_url
+
 def is_video_url(url: str) -> bool:
-    return ("youtube.com/watch" in url) or ("youtu.be/" in url)
+    return _yt_is_video_url(url)
+
+from services.youtube_service import extract_video_id as _yt_extract_video_id
 
 def extract_video_id(url: str) -> str | None:
-    if "youtu.be/" in url:
-        return url.split("youtu.be/")[1].split("?")[0]
-    if "v=" in url:
-        return url.split("v=")[1].split("&")[0]
-    return None
+    return _yt_extract_video_id(url)
 
 def channel_rss_url(channel_id: str) -> str:
     return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
+from services.youtube_service import resolve_channel_id as _yt_resolve_channel_id
+
 def resolve_channel_id(channel_url_or_handle: str) -> str | None:
-    try:
-        if channel_url_or_handle.startswith("UC"):
-            return channel_url_or_handle
-        url = channel_url_or_handle.strip()
-        if not url.startswith("http"):
-            url = f"https://www.youtube.com/{url.lstrip('/')}"
-        r = requests.get(url, timeout=20, headers={"User-Agent":"Mozilla/5.0"})
-        r.raise_for_status()
-        m = re.search(r'"channelId":"(UC[0-9A-Za-z_\-]{20,})"', r.text)
-        if m:
-            return m.group(1)
-    except Exception:
-        return None
-    return None
+    return _yt_resolve_channel_id(channel_url_or_handle)
+
+from services.youtube_service import fetch_latest_from_channel as _yt_fetch_latest
 
 def fetch_latest_from_channel(channel_id: str, since_date: date) -> list[dict]:
-    import xml.etree.ElementTree as ET
-    url = channel_rss_url(channel_id)
-    vids = []
-    all_vids = []
-    try:
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        root = ET.fromstring(r.text)
-        ns = {'atom': 'http://www.w3.org/2005/Atom'}
-        for entry in root.findall('atom:entry', ns):
-            title = entry.find('atom:title', ns).text
-            link = entry.find('atom:link', ns).attrib.get('href')
-            published = entry.find('atom:published', ns).text
-            pub_date = date.fromisoformat(published[:10])
-            video_data = {'title': title, 'url': link, 'published': published}
-            all_vids.append(video_data)
-            
-            # Get videos from the last 7 days
-            days_diff = (since_date - pub_date).days
-            if 0 <= days_diff <= 7:
-                vids.append(video_data)
-        
-        # If no recent videos found, get the latest 3 videos as baseline
-        if not vids and all_vids:
-            vids = all_vids[:3]  # RSS feeds are typically ordered by date descending
-            
-    except Exception:
-        pass
-    return vids
+    return _yt_fetch_latest(channel_id, since_date)
+
+from services.youtube_service import fetch_transcript_text as _yt_fetch_transcript
 
 def fetch_transcript_text(video_id: str) -> str | None:
-    try:
-        parts = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-        return " ".join([p["text"] for p in parts if p.get("text")])
-    except (TranscriptsDisabled, NoTranscriptFound):
-        return None
-    except Exception:
-        return None
+    return _yt_fetch_transcript(video_id)
 
 # ----------------------------
-# OpenAI summarization
+# OpenAI summarization (delegated to service)
 # ----------------------------
+from services.openai_service import summarize_texts as _summarize_texts_service
+
 def summarize_texts(texts: list[str], openai_key: str, date_str: str, mode="daily"):
-    if not openai_key:
-        return f"[{mode.upper()} {date_str}] OpenAI key missing. Paste it in the sidebar."
-    from openai import OpenAI
-    client = OpenAI(api_key=openai_key)
-    prompt = f"""
-You are an investment analyst. Summarize the following sources into a single {mode} brief for {date_str}.
-Output sections in this exact order with short bullet points:
-
-1) One-paragraph market summary
-2) Macro trend & expectations (up / down / sideways, key catalysts)
-3) Top news (most relevant 5)
-4) Spotlights (stocks, sectors, events) with 1–2 bullets each
-5) Stock picks: 
-   - Watch: 3–5 tickers + one-line reason 
-   - Buy: 1–3 tickers + entry rationale and risk
-
-Be concise and practical.
-"""
-    joined = "\n\n".join([f"Source {i+1}:\n{t[:8000]}" for i,t in enumerate(texts if texts else ["(no sources)"])])
-    chat = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.3,
-        messages=[
-            {"role":"system","content":"Be concise, actionable, neutral."},
-            {"role":"user","content": prompt + "\n\n" + joined}
-        ]
-    )
-    return chat.choices[0].message.content.strip()
+    return _summarize_texts_service(texts, openai_key, date_str, mode)
 
 # ----------------------------
 # Streamlit UI
